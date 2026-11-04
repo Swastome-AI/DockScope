@@ -87,7 +87,7 @@ def parse_curpocket(raw: bytes):
     try:
         text = raw.decode("utf-8", errors="ignore")
         df = pd.read_csv(io.StringIO(text), sep=r"\s+", engine="python")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return None, [f"File cannot be read as a table ({e})"]
     df.columns = [str(c).strip() for c in df.columns]
     errs = []
@@ -153,7 +153,7 @@ def read_meta(f):
             m = pd.read_excel(io.BytesIO(raw), dtype=str)
         else:
             m = pd.read_csv(io.BytesIO(raw), sep=None, engine="python", dtype=str)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return None, [f"Metadata file cannot be read ({e})"]
     mapping = {}
     for c in m.columns:
@@ -465,13 +465,15 @@ def build_jaccard(best, residues):
 
 
 # ----------------------------------------------------------------------------
-# Figures & HTML Bundling (Fixes the Lag)
+# Figures
 # ----------------------------------------------------------------------------
 PALETTE = px.colors.qualitative.Bold
 
+
 def bundle_fig(fig):
-    """Pre-computes the HTML so Streamlit doesn't do it on every UI click."""
+    """Pre-compute the HTML once so Streamlit does not rebuild it on every click."""
     return {"fig": fig, "html": fig.to_html(include_plotlyjs="cdn").encode()}
+
 
 def style(fig, title, x=None, y=None, h=520):
     fig.update_layout(template="plotly_white", title=dict(text=f"<b>{title}</b>", x=0.02), font=dict(size=14),
@@ -504,13 +506,13 @@ def build_figures(res):
                color_discrete_sequence=PALETTE, hover_data=["Best_Pocket_ID", "Affinity_Class"])
     f.update_traces(texttemplate="%{text:.1f}", textposition="outside", marker_line_color="black", marker_line_width=1)
     f.update_yaxes(autorange="reversed")
-    F["01_binding_affinity_bar"] = bundle_fig(style(f, "Best Binding Affinity per Receptor–Ligand Complex", "Target protein / receptor",
-                                          "Top Vina score (kcal/mol)  ↑ stronger"))
+    F["01_binding_affinity_bar"] = style(f, "Best Binding Affinity per Receptor–Ligand Complex", "Target protein / receptor",
+                                         "Top Vina score (kcal/mol)  ↑ stronger")
 
     piv = best.pivot(index="Receptor", columns="Ligand", values="Best_Score")
     f = px.imshow(piv, text_auto=".1f", color_continuous_scale="YlGnBu_r", aspect="auto",
                   labels=dict(x="Ligand", y="Receptor", color="Score"))
-    F["02_binding_affinity_heatmap"] = bundle_fig(style(f, "Binding Affinity Heatmap (dark = stronger)", h=max(380, 110 * len(piv) + 160)))
+    F["02_binding_affinity_heatmap"] = style(f, "Binding Affinity Heatmap (dark = stronger)", h=max(380, 110 * len(piv) + 160))
 
     f = px.scatter(P, x="Volume_A3", y="Score", color="Ligand", symbol="Receptor", color_discrete_sequence=PALETTE,
                    hover_data=["Complex", "Pocket_ID"])
@@ -521,90 +523,85 @@ def build_figures(res):
         f.add_trace(go.Scatter(x=xs, y=co[0] * xs + co[1], mode="lines", name="Overall trend",
                                line=dict(color="black", dash="dash")))
     f.update_yaxes(autorange="reversed")
-    F["03_volume_vs_score_scatter"] = bundle_fig(style(f, "Cavity Volume vs Binding Score (all pockets)", "Cavity volume (Å³)",
-                                            "Vina score (kcal/mol)  ↑ stronger", h=560))
+    F["03_volume_vs_score_scatter"] = style(f, "Cavity Volume vs Binding Score (all pockets)", "Cavity volume (Å³)",
+                                            "Vina score (kcal/mol)  ↑ stronger", h=560)
 
     f = px.scatter(P, x="Volume_A3", y="Score", color="Ligand", facet_col="Receptor", facet_col_wrap=min(3, nrec),
                    color_discrete_sequence=PALETTE, hover_data=["Pocket_ID"])
     f.update_traces(marker=dict(size=11, line=dict(width=1, color="black")))
     f.update_yaxes(autorange="reversed")
     f.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-    F["04_volume_vs_score_by_receptor"] = bundle_fig(style(f, "Cavity Volume vs Score – split by Receptor", "Volume (Å³)", "Score (kcal/mol)",
-                                                h=380 * int(np.ceil(nrec / 3)) + 80))
+    F["04_volume_vs_score_by_receptor"] = style(f, "Cavity Volume vs Score – split by Receptor", "Volume (Å³)", "Score (kcal/mol)",
+                                                h=380 * int(np.ceil(nrec / 3)) + 80)
 
     cc = corr.dropna(subset=["Spearman_rho"])
     if len(cc):
         f = px.bar(cc, x="Group", y="Spearman_rho", color="Level", text="Spearman_rho", color_discrete_sequence=PALETTE)
         f.update_traces(texttemplate="%{text:.2f}", textposition="outside", marker_line_color="black", marker_line_width=1)
         f.update_yaxes(range=[-1.1, 1.1])
-        F["05_volume_score_correlation"] = bundle_fig(style(f, "Spearman Correlation: Cavity Volume vs Score", "Group", "Spearman ρ"))
+        F["05_volume_score_correlation"] = style(f, "Spearman Correlation: Cavity Volume vs Score", "Group", "Spearman ρ")
 
     f = px.line(P.sort_values("Pocket_ID"), x="Pocket_ID", y="Score", color="Ligand", facet_col="Receptor",
                 facet_col_wrap=min(3, nrec), markers=True, color_discrete_sequence=PALETTE)
     f.update_yaxes(autorange="reversed")
     f.update_xaxes(dtick=1)
     f.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-    F["06_pocket_score_profile"] = bundle_fig(style(f, "Score Profile across Docking Pockets", "Pocket ID", "Score (kcal/mol)",
-                                         h=380 * int(np.ceil(nrec / 3)) + 80))
+    F["06_pocket_score_profile"] = style(f, "Score Profile across Docking Pockets", "Pocket ID", "Score (kcal/mol)",
+                                         h=380 * int(np.ceil(nrec / 3)) + 80)
 
     pv = P.pivot_table(index="Complex", columns="Pocket_ID", values="Score")
     f = px.imshow(pv, text_auto=".1f", color_continuous_scale="YlGnBu_r", aspect="auto",
                   labels=dict(x="Pocket ID", y="Complex", color="Score"))
     f.update_xaxes(type="category")
-    F["07_pocket_heatmap"] = bundle_fig(style(f, "Pocket-by-Pocket Score Heatmap", h=max(400, 60 * len(pv) + 160)))
+    F["07_pocket_heatmap"] = style(f, "Pocket-by-Pocket Score Heatmap", h=max(400, 60 * len(pv) + 160))
 
     f = px.bar(best, x="Receptor", y="Gap_To_Second", color="Ligand", barmode="group", text="Gap_To_Second",
                color_discrete_sequence=PALETTE)
     f.update_traces(texttemplate="%{text:.2f}", textposition="outside", marker_line_color="black", marker_line_width=1)
-    F["08_site_dominance_gap"] = bundle_fig(style(f, "Binding-Site Dominance (gap between best and 2nd-best pocket)", "Receptor",
-                                       "Score gap (kcal/mol)"))
+    F["08_site_dominance_gap"] = style(f, "Binding-Site Dominance (gap between best and 2nd-best pocket)", "Receptor",
+                                       "Score gap (kcal/mol)")
 
     f = px.box(P, x="Receptor", y="Score", color="Ligand", points="all", color_discrete_sequence=PALETTE)
     f.update_yaxes(autorange="reversed")
-    F["09_score_distribution_box"] = bundle_fig(style(f, "Distribution of Pocket Scores", "Receptor", "Score (kcal/mol)  ↑ stronger"))
+    F["09_score_distribution_box"] = style(f, "Distribution of Pocket Scores", "Receptor", "Score (kcal/mol)  ↑ stronger")
 
     if len(comp):
         f = px.bar(comp, x="Complex", y="Percent", color="Type", barmode="stack", text="Percent",
                    color_discrete_sequence=px.colors.qualitative.Safe)
         f.update_traces(texttemplate="%{text:.0f}%", marker_line_color="white", marker_line_width=1)
-        F["10_residue_composition"] = bundle_fig(style(f, "Chemical Character of Best-Pocket Contact Residues", "Complex",
-                                            "Share of contact residues (%)", h=560))
+        F["10_residue_composition"] = style(f, "Chemical Character of Best-Pocket Contact Residues", "Complex",
+                                            "Share of contact residues (%)", h=560)
 
     if len(jac):
         f = px.bar(jac, x="Receptor", y="Jaccard_Similarity", color="Pair", barmode="group", text="Jaccard_Similarity",
                    color_discrete_sequence=PALETTE)
         f.update_traces(texttemplate="%{text:.2f}", textposition="outside", marker_line_color="black", marker_line_width=1)
         f.update_yaxes(range=[0, 1.1])
-        F["11_ligand_site_overlap"] = bundle_fig(style(f, "Binding-Site Overlap between Ligands (Jaccard of contact residues)", "Receptor",
-                                            "Jaccard similarity (0–1)"))
+        F["11_ligand_site_overlap"] = style(f, "Binding-Site Overlap between Ligands (Jaccard of contact residues)", "Receptor",
+                                            "Jaccard similarity (0–1)")
 
     f = px.bar(best, x="Receptor", y="Pred_Ki_nM", color="Ligand", barmode="group", text="Pred_Ki_nM",
                color_discrete_sequence=PALETTE, log_y=True)
     f.update_traces(texttemplate="%{text:.3g}", textposition="outside", marker_line_color="black", marker_line_width=1)
-    F["12_predicted_Ki"] = bundle_fig(style(f, "Estimated Inhibition Constant (Ki) from Vina Score", "Receptor", "Estimated Ki (nM, log scale)  ↓ stronger"))
+    F["12_predicted_Ki"] = style(f, "Estimated Inhibition Constant (Ki) from Vina Score", "Receptor", "Estimated Ki (nM, log scale)  ↓ stronger")
 
     bs = best.sort_values("Priority_Score")
     f = px.bar(bs, x="Priority_Score", y="Complex", orientation="h", color="Affinity_Class", text="Priority_Score",
                category_orders={"Affinity_Class": CLASS_ORDER},
                color_discrete_map=dict(zip(CLASS_ORDER, ["#1b7837", "#5aae61", "#f1b64c", "#c0504d"])))
     f.update_traces(texttemplate="%{text:.0f}", marker_line_color="black", marker_line_width=1)
-    F["13_priority_ranking"] = bundle_fig(style(f, "Complex Priority Ranking (composite score, 0–100)", "Priority score", "Complex",
-                                     h=max(450, 45 * len(bs) + 160)))
+    F["13_priority_ranking"] = style(f, "Complex Priority Ranking (composite score, 0–100)", "Priority score", "Complex",
+                                     h=max(450, 45 * len(bs) + 160))
 
     if len(pairs):
         f = px.bar(pairs, x="Receptor", y="DDG_B_minus_A", color="Pair", barmode="group", text="DDG_B_minus_A",
                    color_discrete_sequence=PALETTE)
         f.update_traces(texttemplate="%{text:.2f}", textposition="outside", marker_line_color="black", marker_line_width=1)
         f.add_hline(y=0, line_dash="dash", line_color="black")
-        F["14_ligand_differential_DDG"] = bundle_fig(style(f, "Ligand Selectivity: ΔΔG = Score(B) − Score(A)  (positive → A binds stronger)",
-                                                "Receptor", "ΔΔG (kcal/mol)"))
-                                                
-    # Precompute all the 3D maps so they don't lag the UI during dropdown selection
-    F["3d_maps"] = {
-        rec: bundle_fig(fig_3d(P, rec)) 
-        for rec in P["Receptor"].unique()
-    }
-    
+        F["14_ligand_differential_DDG"] = style(f, "Ligand Selectivity: ΔΔG = Score(B) − Score(A)  (positive → A binds stronger)",
+                                                "Receptor", "ΔΔG (kcal/mol)")
+    F = {k: bundle_fig(v) for k, v in F.items()}
+    F["3d_maps"] = {rec: bundle_fig(fig_3d(P, rec)) for rec in P["Receptor"].unique()}
     return F
 
 
@@ -683,13 +680,7 @@ def block(title, body, kind="info"):
 def show_fig(bundle, name):
     cfg = {"displaylogo": False, "toImageButtonOptions": {"format": "png", "scale": 4, "filename": name}}
     st.plotly_chart(bundle["fig"], config=cfg, key=f"pc_{name}")
-    st.download_button(
-        "⬇️ Interactive HTML", 
-        bundle["html"], 
-        file_name=f"{name}.html",
-        mime="text/html", 
-        key=f"dlh_{name}"
-    )
+    st.download_button("⬇️ Interactive HTML", bundle["html"], file_name=f"{name}.html", mime="text/html", key=f"dlh_{name}")
 
 
 def show_table(df, name, title=None, decimals=3):
@@ -873,7 +864,10 @@ def tab_upload(S):
     st.markdown("#### Choose how to upload")
     st.radio("Upload mode", [MANUAL, BULK], key="mode", horizontal=True, label_visibility="collapsed")
     mode = st.session_state.mode
-    manual_ui() if mode == MANUAL else bulk_ui()
+    if mode == MANUAL:
+        manual_ui()
+    else:
+        bulk_ui()
     S = current_state()
     st.divider()
     st.markdown("#### File-check summary")
@@ -979,12 +973,7 @@ def tab_residues(res):
         show_table(jac, "ligand_site_overlap_table", "Ligand site-overlap table")
     st.markdown("**3-D pocket explorer**")
     rec = st.selectbox("Receptor", sorted(P["Receptor"].unique()), key="sel_3d")
-    
-    # -------------------------------------------------------------
-    # NEW: Fetch pre-computed 3D maps instead of re-rendering!
-    # -------------------------------------------------------------
     show_fig(F["3d_maps"][rec], f"3D_pocket_map_{re.sub(r'[^A-Za-z0-9_-]+', '_', rec)}")
-    
     st.markdown("**Contact residues of the best pocket**")
     cplx = st.selectbox("Complex", sorted(residues["Complex"].unique()), key="sel_res")
     show_table(residues[residues["Complex"] == cplx].drop(columns=["Receptor", "Ligand"]), "residues_" + re.sub(r"[^A-Za-z0-9_-]+", "_", cplx))
@@ -1046,22 +1035,14 @@ def build_zip(res, prog):
                 z.writestr(f"tables/{name}.csv", df.to_csv(index=False))
             done += 1
             prog(done / total, f"Writing table {name}…")
-            
-        # -------------------------------------------------------------
-        # NEW: Write HTML directly from pre-computed bundles
-        # -------------------------------------------------------------
         for name, bundle in figs.items():
-            if name == "3d_maps": 
-                continue 
+            if name == "3d_maps":
+                continue
             z.writestr(f"plots_interactive_html/{name}.html", bundle["html"])
             done += 1
             prog(done / total, f"Zipping figure {name}…")
-            
         for rec, bundle in figs.get("3d_maps", {}).items():
-            safe_rec = re.sub(r'[^A-Za-z0-9_-]+', '_', rec)
-            z.writestr(f"plots_interactive_html/3D_pocket_map_{safe_rec}.html", bundle["html"])
-            done += 1
-            
+            z.writestr(f"plots_interactive_html/3D_pocket_map_{re.sub(r'[^A-Za-z0-9_-]+', '_', rec)}.html", bundle["html"])
         z.writestr("SUMMARY.md", build_summary_md(res))
         done += 1
         readme = ("DockScope export\n================\ntables/ - CSV tables\nplots_interactive_html/ - interactive Plotly figures (open in a browser; "
@@ -1069,7 +1050,8 @@ def build_zip(res, prog):
         z.writestr("README.txt", readme)
         done += 1
         prog(1.0, "ZIP ready ✔")
-    return buf.getvalue(), len(figs)
+    n_plots = len(figs) - 1 + len(figs.get("3d_maps", {}))
+    return buf.getvalue(), n_plots
 
 
 def tab_report(res):
