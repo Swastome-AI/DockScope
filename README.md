@@ -1,6 +1,6 @@
 # 🧬 DockScope – CB-Dock2 Blind-Docking Pocket Analytics Suite
 
-DockScope v2.0 is live and available - 
+DockScope v2.0 is live and available - https://dockscope-v2.streamlit.app/
 
 Turn raw CB-Dock2 `curpocket.txt` files into a full docking report: validated inputs, interactive Plotly figures,
 CSV tables, estimated Ki, ranking and a one-click ZIP package.
