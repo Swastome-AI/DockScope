@@ -1013,7 +1013,6 @@ def build_summary_md(res):
 
 def build_zip(res, prog):
     buf = io.BytesIO()
-    png_ok, png_enabled = 0, True
     tables = {"file_validation": res["val"], "all_pockets": res["P"].drop(columns=["contact_residues"]), "best_pocket_table": res["best"],
               "volume_score_correlation": res["corr"], "ligand_selectivity": res["pairs"], "contact_residues": res["residues"],
               "ligand_site_overlap": res["jac"], "outlier_pockets": res["outliers"], "summary_by_ligand": res["agg_lig"],
@@ -1029,12 +1028,6 @@ def build_zip(res, prog):
             prog(done / total, f"Writing table {name}…")
         for name, fig in figs.items():
             z.writestr(f"plots_interactive_html/{name}.html", fig.to_html(include_plotlyjs="cdn"))
-            if png_enabled:
-                try:
-                    z.writestr(f"plots_png/{name}.png", fig.to_image(format="png", width=1400, height=int(fig.layout.height or 600), scale=3))
-                    png_ok += 1
-                except Exception:  # noqa: BLE001
-                    png_enabled = False
             done += 1
             prog(done / total, f"Rendering figure {name}…")
         for rec in sorted(res["P"]["Receptor"].unique()):
@@ -1042,14 +1035,12 @@ def build_zip(res, prog):
                        fig_3d(res["P"], rec).to_html(include_plotlyjs="cdn"))
         z.writestr("SUMMARY.md", build_summary_md(res))
         done += 1
-        readme = ("DockScope export\n================\ntables/ – CSV tables\nplots_interactive_html/ – interactive Plotly figures (open in a browser)\n"
-                  + ("plots_png/ – 1400 px wide, 3x scale PNGs\n" if png_ok else
-                     "PNG export was unavailable on this server (kaleido missing); use the camera icon in each plot to save PNGs.\n")
-                  + "SUMMARY.md – executive summary\n")
+        readme = ("DockScope export\n================\ntables/ - CSV tables\nplots_interactive_html/ - interactive Plotly figures (open in a browser; "
+                  "use the camera icon in the toolbar to save a high-resolution PNG)\nSUMMARY.md - executive summary\n")
         z.writestr("README.txt", readme)
         done += 1
         prog(1.0, "ZIP ready ✔")
-    return buf.getvalue(), png_ok, len(figs)
+    return buf.getvalue(), len(figs)
 
 
 def tab_report(res):
@@ -1082,11 +1073,11 @@ def tab_report(res):
     block("Before you report", "- Docking scores are predictions; validate top hits with MD simulation or experiments.\n"
           "- Keep the same number of cavities for all files in one analysis.\n- Priority score and Ki are screening heuristics.", "warn")
     st.markdown("#### 📦 Download everything")
-    if st.button("🗜️ Build ZIP package (tables + plots + summary)", type="primary"):
+    if st.button("🗜️ Build ZIP package (tables + interactive plots + summary)", type="primary"):
         bar = st.progress(0, text="Preparing…")
-        data, png_ok, nfig = build_zip(res, lambda f, t: bar.progress(min(f, 1.0), text=t))
+        data, nfig = build_zip(res, lambda f, t: bar.progress(min(f, 1.0), text=t))
         st.session_state.zip_bytes = data
-        st.session_state.zip_info = f"{nfig} interactive plots" + (f", {png_ok} PNG images" if png_ok else ", PNGs unavailable on this server") + ", CSV tables, summary"
+        st.session_state.zip_info = f"{nfig} interactive HTML plots, CSV tables, summary"
     if st.session_state.zip_bytes:
         st.success("Package ready: " + st.session_state.zip_info)
         st.download_button("⬇️ Download DockScope_results.zip", st.session_state.zip_bytes, file_name="DockScope_results.zip", mime="application/zip")
