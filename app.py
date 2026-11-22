@@ -15,6 +15,8 @@ import zipfile
 from collections import Counter, defaultdict
 from itertools import combinations
 
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -38,6 +40,14 @@ BEST_LOWEST = "Lowest Vina score (recommended)"
 BEST_ID1 = "Pocket ID 1 (CB-Dock2 top-ranked cavity)"
 R_KCAL = 0.0019872041  # kcal / (mol K)
 
+BLACK = "black"
+FOOTER_LINES = [
+    "Dockscope is actively maintained and developed by Swastome-AI under Swastome Private Limited.",
+    "© 2026 Swastome Private Limited. All rights reserved. Dockscope and the Swastome logo are the property of Swastome Private Limited. "
+    "No part of this app may be copied, modified or distributed without written permission. "
+    "If you are using Dockscop please acknowledge and refer ",
+]
+
 RES_TYPES = {
     "Hydrophobic": {"ALA", "VAL", "LEU", "ILE", "MET", "PRO", "GLY"},
     "Aromatic": {"PHE", "TYR", "TRP"},
@@ -53,6 +63,7 @@ st.markdown(
     .block-container {padding-top: 1.4rem;}
     .ds-title {font-size: 2.3rem; font-weight: 800; margin-bottom: 0;}
     .ds-sub {font-size: 1.05rem; color: #5b6770; margin-top: 0;}
+    .ds-footer {font-size: 0.78rem; line-height: 1.45; color: #6b7780; text-align: center; padding: 0.4rem 1rem 1.2rem;}
     div[data-testid="stMetric"] {background: rgba(120,140,160,0.08); border-radius: 10px; padding: 8px 12px;}
     </style>
     """,
@@ -69,7 +80,7 @@ def init_state():
         manual_records=[], manual_done=False,
         bulk_records=[], bulk_submitted=False, bulk_msgs=[], bulk_sig=None,
         ack_mixed=False, results=None, zip_bytes=None, zip_info="",
-        flash=None, last_n=5,
+        flash=None, last_n=5, pdf_bytes=None, pdf_for=None,
     )
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -468,6 +479,9 @@ def build_jaccard(best, residues):
 # Figures
 # ----------------------------------------------------------------------------
 PALETTE = px.colors.qualitative.Bold
+# Light-to-mid blue/green scale (dark navy removed) so BLACK text on heatmap cells is always legible
+HEAT_SCALE = px.colors.sample_colorscale("YlGnBu_r", list(np.linspace(0.3, 1.0, 9)))
+CLASS_COLORS = dict(zip(CLASS_ORDER, ["#4daf4a", "#a6d96a", "#fdd05e", "#f4837d"]))
 
 
 def bundle_fig(fig):
@@ -476,9 +490,16 @@ def bundle_fig(fig):
 
 
 def style(fig, title, x=None, y=None, h=520):
-    fig.update_layout(template="plotly_white", title=dict(text=f"<b>{title}</b>", x=0.02), font=dict(size=14),
+    """Common layout. All text is black on a white background so it stays readable in light AND dark app themes."""
+    fig.update_layout(template="plotly_white", title=dict(text=f"<b>{title}</b>", x=0.02, font=dict(color=BLACK, size=18)),
+                      font=dict(size=14, color=BLACK), paper_bgcolor="white", plot_bgcolor="white",
                       height=h, margin=dict(l=70, r=30, t=80, b=70),
-                      legend=dict(bordercolor="#bbbbbb", borderwidth=1))
+                      legend=dict(bordercolor="#bbbbbb", borderwidth=1, bgcolor="white",
+                                  font=dict(color=BLACK), title=dict(font=dict(color=BLACK))))
+    fig.update_xaxes(tickfont=dict(color=BLACK), title_font=dict(color=BLACK), linecolor=BLACK)
+    fig.update_yaxes(tickfont=dict(color=BLACK), title_font=dict(color=BLACK), linecolor=BLACK)
+    fig.update_annotations(font=dict(color=BLACK))
+    fig.update_coloraxes(colorbar=dict(tickfont=dict(color=BLACK), title=dict(font=dict(color=BLACK))))
     if x:
         fig.update_xaxes(title_text=f"<b>{x}</b>")
     if y:
@@ -490,9 +511,13 @@ def fig_3d(P, receptor):
     d = P[P["Receptor"] == receptor]
     fig = px.scatter_3d(d, x="center_x", y="center_y", z="center_z", color="Score", size="Volume_A3",
                         symbol="Ligand", hover_data=["Complex", "Pocket_ID", "Volume_A3", "Score"],
-                        color_continuous_scale="YlGnBu_r", size_max=28)
-    fig.update_layout(template="plotly_white", title=dict(text=f"<b>3D pocket map – {receptor}</b>", x=0.02),
-                      height=620, margin=dict(l=0, r=0, t=70, b=0))
+                        color_continuous_scale=HEAT_SCALE, size_max=28)
+    ax3d = dict(title=dict(font=dict(color=BLACK)), tickfont=dict(color=BLACK), color=BLACK)
+    fig.update_layout(template="plotly_white", title=dict(text=f"<b>3D pocket map – {receptor}</b>", x=0.02, font=dict(color=BLACK, size=18)),
+                      font=dict(size=13, color=BLACK), paper_bgcolor="white", height=620, margin=dict(l=0, r=0, t=70, b=0),
+                      scene=dict(xaxis=ax3d, yaxis=ax3d, zaxis=ax3d),
+                      legend=dict(font=dict(color=BLACK), bgcolor="white"))
+    fig.update_coloraxes(colorbar=dict(tickfont=dict(color=BLACK), title=dict(font=dict(color=BLACK))))
     return fig
 
 
@@ -504,14 +529,15 @@ def build_figures(res):
 
     f = px.bar(best, x="Receptor", y="Best_Score", color="Ligand", barmode="group", text="Best_Score",
                color_discrete_sequence=PALETTE, hover_data=["Best_Pocket_ID", "Affinity_Class"])
-    f.update_traces(texttemplate="%{text:.1f}", textposition="outside", marker_line_color="black", marker_line_width=1)
+    f.update_traces(texttemplate="%{text:.1f}", textposition="outside", textfont=dict(color=BLACK), marker_line_color="black", marker_line_width=1)
     f.update_yaxes(autorange="reversed")
     F["01_binding_affinity_bar"] = style(f, "Best Binding Affinity per Receptor–Ligand Complex", "Target protein / receptor",
                                          "Top Vina score (kcal/mol)  ↑ stronger")
 
     piv = best.pivot(index="Receptor", columns="Ligand", values="Best_Score")
-    f = px.imshow(piv, text_auto=".1f", color_continuous_scale="YlGnBu_r", aspect="auto",
+    f = px.imshow(piv, text_auto=".1f", color_continuous_scale=HEAT_SCALE, aspect="auto",
                   labels=dict(x="Ligand", y="Receptor", color="Score"))
+    f.update_traces(textfont=dict(color=BLACK, size=13))
     F["02_binding_affinity_heatmap"] = style(f, "Binding Affinity Heatmap (dark = stronger)", h=max(380, 110 * len(piv) + 160))
 
     f = px.scatter(P, x="Volume_A3", y="Score", color="Ligand", symbol="Receptor", color_discrete_sequence=PALETTE,
@@ -537,7 +563,7 @@ def build_figures(res):
     cc = corr.dropna(subset=["Spearman_rho"])
     if len(cc):
         f = px.bar(cc, x="Group", y="Spearman_rho", color="Level", text="Spearman_rho", color_discrete_sequence=PALETTE)
-        f.update_traces(texttemplate="%{text:.2f}", textposition="outside", marker_line_color="black", marker_line_width=1)
+        f.update_traces(texttemplate="%{text:.2f}", textposition="outside", textfont=dict(color=BLACK), marker_line_color="black", marker_line_width=1)
         f.update_yaxes(range=[-1.1, 1.1])
         F["05_volume_score_correlation"] = style(f, "Spearman Correlation: Cavity Volume vs Score", "Group", "Spearman ρ")
 
@@ -550,14 +576,15 @@ def build_figures(res):
                                          h=380 * int(np.ceil(nrec / 3)) + 80)
 
     pv = P.pivot_table(index="Complex", columns="Pocket_ID", values="Score")
-    f = px.imshow(pv, text_auto=".1f", color_continuous_scale="YlGnBu_r", aspect="auto",
+    f = px.imshow(pv, text_auto=".1f", color_continuous_scale=HEAT_SCALE, aspect="auto",
                   labels=dict(x="Pocket ID", y="Complex", color="Score"))
     f.update_xaxes(type="category")
+    f.update_traces(textfont=dict(color=BLACK, size=12))
     F["07_pocket_heatmap"] = style(f, "Pocket-by-Pocket Score Heatmap", h=max(400, 60 * len(pv) + 160))
 
     f = px.bar(best, x="Receptor", y="Gap_To_Second", color="Ligand", barmode="group", text="Gap_To_Second",
                color_discrete_sequence=PALETTE)
-    f.update_traces(texttemplate="%{text:.2f}", textposition="outside", marker_line_color="black", marker_line_width=1)
+    f.update_traces(texttemplate="%{text:.2f}", textposition="outside", textfont=dict(color=BLACK), marker_line_color="black", marker_line_width=1)
     F["08_site_dominance_gap"] = style(f, "Binding-Site Dominance (gap between best and 2nd-best pocket)", "Receptor",
                                        "Score gap (kcal/mol)")
 
@@ -567,36 +594,36 @@ def build_figures(res):
 
     if len(comp):
         f = px.bar(comp, x="Complex", y="Percent", color="Type", barmode="stack", text="Percent",
-                   color_discrete_sequence=px.colors.qualitative.Safe)
-        f.update_traces(texttemplate="%{text:.0f}%", marker_line_color="white", marker_line_width=1)
+                   color_discrete_sequence=px.colors.qualitative.Pastel)
+        f.update_traces(texttemplate="%{text:.0f}%", textfont=dict(color=BLACK), marker_line_color="black", marker_line_width=1)
         F["10_residue_composition"] = style(f, "Chemical Character of Best-Pocket Contact Residues", "Complex",
                                             "Share of contact residues (%)", h=560)
 
     if len(jac):
         f = px.bar(jac, x="Receptor", y="Jaccard_Similarity", color="Pair", barmode="group", text="Jaccard_Similarity",
                    color_discrete_sequence=PALETTE)
-        f.update_traces(texttemplate="%{text:.2f}", textposition="outside", marker_line_color="black", marker_line_width=1)
+        f.update_traces(texttemplate="%{text:.2f}", textposition="outside", textfont=dict(color=BLACK), marker_line_color="black", marker_line_width=1)
         f.update_yaxes(range=[0, 1.1])
         F["11_ligand_site_overlap"] = style(f, "Binding-Site Overlap between Ligands (Jaccard of contact residues)", "Receptor",
                                             "Jaccard similarity (0–1)")
 
     f = px.bar(best, x="Receptor", y="Pred_Ki_nM", color="Ligand", barmode="group", text="Pred_Ki_nM",
                color_discrete_sequence=PALETTE, log_y=True)
-    f.update_traces(texttemplate="%{text:.3g}", textposition="outside", marker_line_color="black", marker_line_width=1)
+    f.update_traces(texttemplate="%{text:.3g}", textposition="outside", textfont=dict(color=BLACK), marker_line_color="black", marker_line_width=1)
     F["12_predicted_Ki"] = style(f, "Estimated Inhibition Constant (Ki) from Vina Score", "Receptor", "Estimated Ki (nM, log scale)  ↓ stronger")
 
     bs = best.sort_values("Priority_Score")
     f = px.bar(bs, x="Priority_Score", y="Complex", orientation="h", color="Affinity_Class", text="Priority_Score",
                category_orders={"Affinity_Class": CLASS_ORDER},
-               color_discrete_map=dict(zip(CLASS_ORDER, ["#1b7837", "#5aae61", "#f1b64c", "#c0504d"])))
-    f.update_traces(texttemplate="%{text:.0f}", marker_line_color="black", marker_line_width=1)
+               color_discrete_map=CLASS_COLORS)
+    f.update_traces(texttemplate="%{text:.0f}", textposition="outside", textfont=dict(color=BLACK), marker_line_color="black", marker_line_width=1)
     F["13_priority_ranking"] = style(f, "Complex Priority Ranking (composite score, 0–100)", "Priority score", "Complex",
                                      h=max(450, 45 * len(bs) + 160))
 
     if len(pairs):
         f = px.bar(pairs, x="Receptor", y="DDG_B_minus_A", color="Pair", barmode="group", text="DDG_B_minus_A",
                    color_discrete_sequence=PALETTE)
-        f.update_traces(texttemplate="%{text:.2f}", textposition="outside", marker_line_color="black", marker_line_width=1)
+        f.update_traces(texttemplate="%{text:.2f}", textposition="outside", textfont=dict(color=BLACK), marker_line_color="black", marker_line_width=1)
         f.add_hline(y=0, line_dash="dash", line_color="black")
         F["14_ligand_differential_DDG"] = style(f, "Ligand Selectivity: ΔΔG = Score(B) − Score(A)  (positive → A binds stronger)",
                                                 "Receptor", "ΔΔG (kcal/mol)")
@@ -679,7 +706,7 @@ def block(title, body, kind="info"):
 
 def show_fig(bundle, name):
     cfg = {"displaylogo": False, "toImageButtonOptions": {"format": "png", "scale": 4, "filename": name}}
-    st.plotly_chart(bundle["fig"], config=cfg, key=f"pc_{name}")
+    st.plotly_chart(bundle["fig"], config=cfg, key=f"pc_{name}", theme=None)
     st.download_button("⬇️ Interactive HTML", bundle["html"], file_name=f"{name}.html", mime="text/html", key=f"dlh_{name}")
 
 
@@ -882,6 +909,7 @@ def tab_upload(S):
             res = run_analysis(S, st.session_state.best_mode, st.session_state.temp_k, lambda f, t: bar.progress(f, text=t))
             st.session_state.results = res
             st.session_state.zip_bytes = None
+            st.session_state.pdf_bytes = None
             st.success("Analysis finished – open the next tabs (2️⃣ → 7️⃣) to explore results.")
         elif st.session_state.results is not None and st.session_state.results["sig"] == make_sig(S):
             st.success("Analysis is up to date – explore tabs 2️⃣ → 7️⃣.")
@@ -1054,6 +1082,466 @@ def build_zip(res, prog):
     return buf.getvalue(), n_plots
 
 
+# ----------------------------------------------------------------------------
+# PDF report (ReportLab + Matplotlib – no browser / kaleido needed)
+# ----------------------------------------------------------------------------
+def _pdf_fonts():
+    """Register DejaVu Sans (ships with Matplotlib) so Å, Δ, ≈, ≤, −, ρ … render correctly in the PDF."""
+    import os
+    import matplotlib
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    d = os.path.join(matplotlib.get_data_path(), "fonts", "ttf")
+    files = {"DSans": "DejaVuSans.ttf", "DSans-Bold": "DejaVuSans-Bold.ttf",
+             "DSans-Italic": "DejaVuSans-Oblique.ttf", "DSans-BoldItalic": "DejaVuSans-BoldOblique.ttf"}
+    for name, fn in files.items():
+        if name not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont(name, os.path.join(d, fn)))
+    pdfmetrics.registerFontFamily("DSans", normal="DSans", bold="DSans-Bold", italic="DSans-Italic", boldItalic="DSans-BoldItalic")
+
+
+def _pdf_figures(res):
+    """Static, black-on-white Matplotlib versions of the 14 analysis figures. Returns {key: (caption, png_bytes)}."""
+    import matplotlib
+    from matplotlib.colors import LinearSegmentedColormap
+    from matplotlib.ticker import MaxNLocator
+    from matplotlib.figure import Figure
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    P, best, corr, pairs, comp, jac = res["P"], res["best"], res["corr"], res["pairs"], res["comp"], res["jac"]
+    cmap = LinearSegmentedColormap.from_list("ds", matplotlib.colormaps["YlGnBu_r"](np.linspace(0.3, 1.0, 256)))
+    markers = ["o", "s", "^", "D", "v", "P", "X", "*"]
+    out = {}
+
+    def colors_for(names):
+        names = list(dict.fromkeys(names))
+        return {n: PALETTE[i % len(PALETTE)] for i, n in enumerate(names)}
+
+    def polish(ax, title=None, xl=None, yl=None, grid="y"):
+        ax.set_facecolor("white")
+        ax.grid(axis=grid, color="#e3e3e3", lw=0.7)
+        ax.set_axisbelow(True)
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+        if title:
+            ax.set_title(title, loc="left", fontweight="bold", fontsize=10.5)
+        if xl:
+            ax.set_xlabel(xl, fontweight="bold")
+        if yl:
+            ax.set_ylabel(yl, fontweight="bold")
+
+    def save(key, caption, fig):
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=200, bbox_inches="tight", facecolor="white")
+        out[key] = (caption, buf.getvalue())
+
+    def grouped(key, caption, df, x, y, hue, fmt, xl, yl, log=False, invert=False, ylim=None, hline=None, legend_title=None):
+        fig = Figure(figsize=(7.2, 4.3))
+        ax = fig.subplots()
+        cats, hues = list(dict.fromkeys(df[x])), list(dict.fromkeys(df[hue]))
+        col, n = colors_for(hues), len(hues)
+        width = 0.8 / n
+        for j, h in enumerate(hues):
+            vals = df[df[hue] == h].drop_duplicates(x).set_index(x).reindex(cats)[y].values.astype(float)
+            xs = np.arange(len(cats)) + (j - (n - 1) / 2) * width
+            ax.bar(xs, vals, width, color=col[h], edgecolor="black", linewidth=0.6, label=h, log=log)
+            for xv, v in zip(xs, vals):
+                if np.isnan(v):
+                    continue
+                up = (v >= 0) != invert
+                ax.annotate(fmt.format(v), (xv, v), xytext=(0, 3 if up else -3), textcoords="offset points",
+                            ha="center", va="bottom" if up else "top", fontsize=7, color="black")
+        ax.set_xticks(range(len(cats)))
+        ax.set_xticklabels(cats, rotation=0 if len(cats) <= 4 else 30, ha="center" if len(cats) <= 4 else "right")
+        if invert:
+            ax.invert_yaxis()
+        if ylim:
+            ax.set_ylim(*ylim)
+        if hline is not None:
+            ax.axhline(hline, color="black", ls="--", lw=0.9)
+        polish(ax, None, xl, yl)
+        ax.margins(y=0.12)
+        ax.legend(title=legend_title or hue, loc="upper center", bbox_to_anchor=(0.5, -0.2 if len(cats) <= 4 else -0.3),
+                  ncol=min(n, 3), frameon=True, edgecolor="#bbbbbb", fontsize=8, title_fontsize=8)
+        save(key, caption, fig)
+
+    def heat(key, caption, piv, xl, yl, cbar, h):
+        fig = Figure(figsize=(7.2, h))
+        ax = fig.subplots()
+        im = ax.imshow(piv.values.astype(float), cmap=cmap, aspect="auto")
+        ax.set_xticks(range(piv.shape[1]))
+        ax.set_xticklabels([str(c) for c in piv.columns], rotation=0 if piv.shape[1] <= 8 else 45, ha="center" if piv.shape[1] <= 8 else "right")
+        ax.set_yticks(range(piv.shape[0]))
+        ax.set_yticklabels([str(i) for i in piv.index])
+        for i in range(piv.shape[0]):
+            for j in range(piv.shape[1]):
+                v = piv.values[i, j]
+                if pd.notna(v):
+                    ax.text(j, i, f"{v:.1f}", ha="center", va="center", fontsize=8, color="black")
+        ax.set_xlabel(xl, fontweight="bold")
+        ax.set_ylabel(yl, fontweight="bold")
+        for sp in ax.spines.values():
+            sp.set_visible(False)
+        cb = fig.colorbar(im, ax=ax, pad=0.02)
+        cb.set_label(cbar, color="black")
+        cb.ax.tick_params(colors="black")
+        save(key, caption, fig)
+
+    nrec = P["Receptor"].nunique()
+    ncol = min(3, nrec)
+    nrow = int(np.ceil(nrec / ncol))
+    lig_col = colors_for(P["Ligand"])
+
+    def facets(key, caption, kind):
+        fig = Figure(figsize=(7.2, 2.9 * nrow + 0.6))
+        axes = fig.subplots(nrow, ncol, sharey=True, squeeze=False)
+        for k, (rec, g) in enumerate(P.groupby("Receptor", sort=False)):
+            ax = axes[k // ncol][k % ncol]
+            for lig, gl in g.groupby("Ligand", sort=False):
+                if kind == "scatter":
+                    ax.scatter(gl["Volume_A3"], gl["Score"], s=34, color=lig_col[lig], edgecolor="black", lw=0.6, zorder=3)
+                else:
+                    gl = gl.sort_values("Pocket_ID")
+                    ax.plot(gl["Pocket_ID"], gl["Score"], marker="o", ms=4, color=lig_col[lig], lw=1.4)
+            polish(ax, rec, "Cavity volume (Å³)" if kind == "scatter" else "Pocket ID",
+                   "Score (kcal/mol)" if k % ncol == 0 else None, grid="both")
+            ax.title.set_fontsize(9)
+            ax.tick_params(labelsize=7)
+            if kind == "line":
+                ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        for k in range(nrec, nrow * ncol):
+            axes[k // ncol][k % ncol].set_visible(False)
+        axes[0][0].invert_yaxis()
+        fig.legend(handles=[Line2D([], [], marker="o", ls="", color=c, mec="black", label=l) for l, c in lig_col.items()],
+                   title="Ligand", loc="lower center", ncol=min(len(lig_col), 4), frameon=True, edgecolor="#bbbbbb", fontsize=8,
+                   title_fontsize=8, bbox_to_anchor=(0.5, -0.04))
+        fig.tight_layout(rect=(0, 0.05, 1, 1))
+        save(key, caption, fig)
+
+    # 01 / 02 – binding affinity
+    grouped("01", "Best binding affinity per receptor–ligand complex (higher bar = stronger binding)", best, "Receptor", "Best_Score",
+            "Ligand", "{:.1f}", "Target protein / receptor", "Top Vina score (kcal/mol)  ↑ stronger", invert=True)
+    heat("02", "Binding-affinity heat-map (kcal/mol; darker = stronger)", best.pivot(index="Receptor", columns="Ligand", values="Best_Score"),
+         "Ligand", "Receptor", "Score (kcal/mol)", max(3.0, 0.6 * best["Receptor"].nunique() + 1.8))
+
+    # 03 – scatter (all pockets)
+    fig = Figure(figsize=(7.2, 4.6))
+    ax = fig.subplots()
+    recs = list(dict.fromkeys(P["Receptor"]))
+    for (rec, lig), g in P.groupby(["Receptor", "Ligand"], sort=False):
+        ax.scatter(g["Volume_A3"], g["Score"], s=48, marker=markers[recs.index(rec) % len(markers)], color=lig_col[lig],
+                   edgecolor="black", lw=0.7, zorder=3)
+    if len(P) >= 3 and P["Volume_A3"].nunique() > 1:
+        co = np.polyfit(P["Volume_A3"], P["Score"], 1)
+        xs = np.linspace(P["Volume_A3"].min(), P["Volume_A3"].max(), 50)
+        ax.plot(xs, co[0] * xs + co[1], "k--", lw=1.1)
+    ax.invert_yaxis()
+    polish(ax, None, "Cavity volume (Å³)", "Vina score (kcal/mol)  ↑ stronger", grid="both")
+    handles = [Line2D([], [], marker="o", ls="", color=c, mec="black", label=l) for l, c in lig_col.items()]
+    handles += [Line2D([], [], marker=markers[i % len(markers)], ls="", color="white", mec="black", label=r) for i, r in enumerate(recs)]
+    handles += [Line2D([], [], ls="--", color="black", label="Overall trend")]
+    ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.17), ncol=4, frameon=True, edgecolor="#bbbbbb", fontsize=8)
+    save("03", "Cavity volume vs Vina score for every pocket (colour = ligand, symbol = receptor)", fig)
+
+    facets("04", "Cavity volume vs score, split by receptor", "scatter")
+
+    # 05 – correlation
+    cc = corr.dropna(subset=["Spearman_rho"])
+    if len(cc):
+        fig = Figure(figsize=(7.2, 4.0))
+        ax = fig.subplots()
+        lv_col = colors_for(cc["Level"])
+        ax.bar(range(len(cc)), cc["Spearman_rho"], color=[lv_col[l] for l in cc["Level"]], edgecolor="black", lw=0.6)
+        for i, v in enumerate(cc["Spearman_rho"]):
+            ax.annotate(f"{v:.2f}", (i, v), xytext=(0, 3 if v >= 0 else -3), textcoords="offset points", ha="center",
+                        va="bottom" if v >= 0 else "top", fontsize=7.5)
+        ax.axhline(0, color="black", lw=0.8)
+        ax.set_ylim(-1.1, 1.1)
+        ax.set_xticks(range(len(cc)))
+        ax.set_xticklabels(cc["Group"], rotation=30, ha="right")
+        polish(ax, None, "Group", "Spearman ρ")
+        ax.legend(handles=[Patch(facecolor=c, edgecolor="black", label=l) for l, c in lv_col.items()], title="Level", fontsize=8,
+                  title_fontsize=8, frameon=True, edgecolor="#bbbbbb", loc="upper center", bbox_to_anchor=(0.5, -0.32), ncol=3)
+        save("05", "Spearman correlation between cavity volume and score", fig)
+
+    facets("06", "Score profile across docking pockets", "line")
+
+    pv = P.pivot_table(index="Complex", columns="Pocket_ID", values="Score")
+    heat("07", "Pocket-by-pocket score heat-map (kcal/mol)", pv, "Pocket ID", "Complex", "Score (kcal/mol)", max(3.2, 0.42 * len(pv) + 1.8))
+
+    grouped("08", "Binding-site dominance: gap between the best and 2nd-best pocket", best, "Receptor", "Gap_To_Second", "Ligand",
+            "{:.2f}", "Receptor", "Score gap (kcal/mol)")
+
+    # 09 – box plot
+    fig = Figure(figsize=(7.2, 4.3))
+    ax = fig.subplots()
+    cats, hues = list(dict.fromkeys(P["Receptor"])), list(dict.fromkeys(P["Ligand"]))
+    width = 0.8 / len(hues)
+    for j, h in enumerate(hues):
+        data, pos = [], []
+        for i, c in enumerate(cats):
+            v = P[(P["Receptor"] == c) & (P["Ligand"] == h)]["Score"].values
+            if len(v):
+                data.append(v)
+                pos.append(i + (j - (len(hues) - 1) / 2) * width)
+        if data:
+            bp = ax.boxplot(data, positions=pos, widths=width * 0.85, patch_artist=True, showfliers=False,
+                            medianprops=dict(color="black"), boxprops=dict(edgecolor="black"),
+                            whiskerprops=dict(color="black"), capprops=dict(color="black"))
+            for b in bp["boxes"]:
+                b.set_facecolor(lig_col[h])
+            for v, p_ in zip(data, pos):
+                ax.scatter(np.full(len(v), p_), v, s=10, color="black", zorder=4)
+    ax.set_xticks(range(len(cats)))
+    ax.set_xticklabels(cats)
+    ax.invert_yaxis()
+    polish(ax, None, "Receptor", "Score (kcal/mol)  ↑ stronger")
+    ax.legend(handles=[Patch(facecolor=c, edgecolor="black", label=l) for l, c in lig_col.items()], title="Ligand", fontsize=8,
+              title_fontsize=8, frameon=True, edgecolor="#bbbbbb", loc="upper center", bbox_to_anchor=(0.5, -0.2), ncol=min(len(lig_col), 4))
+    save("09", "Distribution of pocket scores per receptor and ligand", fig)
+
+    # 10 – residue composition
+    if len(comp):
+        pc = comp.pivot_table(index="Complex", columns="Type", values="Percent", fill_value=0)
+        tcol = {t: px.colors.qualitative.Pastel[i % 11] for i, t in enumerate(pc.columns)}
+        fig = Figure(figsize=(7.2, 4.6))
+        ax = fig.subplots()
+        bottom = np.zeros(len(pc))
+        for t in pc.columns:
+            ax.bar(range(len(pc)), pc[t].values, bottom=bottom, color=tcol[t], edgecolor="black", lw=0.6, label=t)
+            for i, v in enumerate(pc[t].values):
+                if v >= 6:
+                    ax.text(i, bottom[i] + v / 2, f"{v:.0f}%", ha="center", va="center", fontsize=7, color="black")
+            bottom += pc[t].values
+        ax.set_xticks(range(len(pc)))
+        ax.set_xticklabels(pc.index, rotation=30, ha="right", fontsize=7.5)
+        polish(ax, None, "Complex", "Share of contact residues (%)")
+        ax.legend(title="Type", fontsize=8, title_fontsize=8, frameon=True, edgecolor="#bbbbbb", loc="upper center",
+                  bbox_to_anchor=(0.5, -0.38), ncol=3)
+        save("10", "Chemical character of best-pocket contact residues", fig)
+
+    if len(jac):
+        grouped("11", "Binding-site overlap between ligands (Jaccard similarity of contact residues)", jac, "Receptor", "Jaccard_Similarity",
+                "Pair", "{:.2f}", "Receptor", "Jaccard similarity (0–1)", ylim=(0, 1.15))
+
+    grouped("12", "Estimated Ki from Vina score (log scale; lower = tighter)", best, "Receptor", "Pred_Ki_nM", "Ligand", "{:.3g}",
+            "Receptor", "Estimated Ki (nM, log scale)  ↓ stronger", log=True)
+
+    # 13 – priority ranking
+    bs = best.sort_values("Priority_Score")
+    fig = Figure(figsize=(7.2, max(3.2, 0.34 * len(bs) + 1.4)))
+    ax = fig.subplots()
+    ax.barh(range(len(bs)), bs["Priority_Score"], color=[CLASS_COLORS[c] for c in bs["Affinity_Class"]], edgecolor="black", lw=0.6)
+    for i, v in enumerate(bs["Priority_Score"]):
+        ax.text(v + 1, i, f"{v:.0f}", va="center", fontsize=7.5)
+    ax.set_yticks(range(len(bs)))
+    ax.set_yticklabels(bs["Complex"], fontsize=7.5)
+    ax.set_xlim(0, 108)
+    polish(ax, None, "Priority score (0–100)", None, grid="x")
+    ax.legend(handles=[Patch(facecolor=c, edgecolor="black", label=l) for l, c in CLASS_COLORS.items()], title="Affinity class",
+              fontsize=7.5, title_fontsize=8, frameon=True, edgecolor="#bbbbbb", loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=2)
+    save("13", "Composite priority ranking of complexes (70% affinity, 15% dominance, 15% breadth)", fig)
+
+    if len(pairs):
+        grouped("14", "Ligand selectivity: ΔΔG = Score(B) − Score(A); positive means A binds stronger", pairs, "Receptor", "DDG_B_minus_A",
+                "Pair", "{:.2f}", "Receptor", "ΔΔG (kcal/mol)", hline=0)
+    return out
+
+
+def _md_to_rl(t):
+    """Tiny markdown (**bold**, *italic*) → ReportLab paragraph markup."""
+    from xml.sax.saxutils import escape
+    t = escape(str(t))
+    t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
+    return re.sub(r"(?<!\*)\*(.+?)\*(?!\*)", r"<i>\1</i>", t)
+
+
+def build_pdf(res, author):
+    """Create the PDF report (A4) and return its bytes. Every page carries the Swastome footer."""
+    _pdf_fonts()
+    import matplotlib
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.lib.utils import ImageReader
+    from reportlab.platypus import Image, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from xml.sax.saxutils import escape
+
+    with matplotlib.rc_context({"font.family": "DejaVu Sans", "font.size": 8.5, "text.color": "black", "axes.labelcolor": "black",
+                                "axes.edgecolor": "black", "xtick.color": "black", "ytick.color": "black", "axes.titlecolor": "black",
+                                "figure.facecolor": "white", "axes.facecolor": "white", "legend.labelcolor": "black"}):
+        figs = _pdf_figures(res)
+
+    best, P, corr = res["best"], res["P"], res["corr"]
+    W, _H = A4
+    LM = RM = 1.8 * cm
+    avail = W - LM - RM
+    ink, teal, grey = colors.HexColor("#111111"), colors.HexColor("#0b5d6b"), colors.HexColor("#555555")
+    base = dict(fontName="DSans", textColor=ink)
+    S = {
+        "title": ParagraphStyle("t", fontName="DSans-Bold", fontSize=26, leading=30, textColor=teal),
+        "sub": ParagraphStyle("s", fontSize=11, leading=15, textColor=grey, fontName="DSans"),
+        "h1": ParagraphStyle("h1", fontName="DSans-Bold", fontSize=14, leading=18, textColor=teal, spaceBefore=6, spaceAfter=6),
+        "h2": ParagraphStyle("h2", fontName="DSans-Bold", fontSize=10.5, leading=14, textColor=ink, spaceBefore=8, spaceAfter=4),
+        "p": ParagraphStyle("p", fontSize=9, leading=13, spaceAfter=4, **base),
+        "li": ParagraphStyle("li", fontSize=9, leading=13, leftIndent=12, bulletIndent=2, spaceAfter=2, **base),
+        "cap": ParagraphStyle("cap", fontName="DSans-Italic", fontSize=7.8, leading=10, textColor=grey, alignment=TA_CENTER, spaceAfter=8),
+        "th": ParagraphStyle("th", fontName="DSans-Bold", fontSize=7, leading=9, textColor=colors.white),
+        "td": ParagraphStyle("td", fontName="DSans", fontSize=7, leading=9, textColor=ink),
+        "small": ParagraphStyle("sm", fontName="DSans", fontSize=7.5, leading=10, textColor=grey, spaceAfter=4),
+    }
+
+    def para(t, st="p"):
+        return Paragraph(_md_to_rl(t), S[st])
+
+    def bullets(items):
+        return [Paragraph(_md_to_rl(x), S["li"], bulletText="•") for x in items]
+
+    def cellfmt(v):
+        if isinstance(v, (float, np.floating)):
+            if pd.isna(v):
+                return "—"
+            return f"{v:.3g}" if abs(v) >= 1e4 or (v != 0 and abs(v) < 1e-3) else f"{v:.2f}"
+        return str(v)
+
+    def table(df, max_rows=40):
+        d = df.head(max_rows)
+        head = [Paragraph(escape(str(c).replace("_", " ")), S["th"]) for c in d.columns]
+        rows = [[Paragraph(escape(cellfmt(v)), S["td"]) for v in r] for r in d.itertuples(index=False)]
+        lens = [min(28, max(6, len(str(c)), *(len(cellfmt(v)) for v in d[c]))) for c in d.columns]
+        widths = [avail * l / sum(lens) for l in lens]
+        t = Table([head] + rows, colWidths=widths, repeatRows=1)
+        t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), teal), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                               ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#eef4f5")]),
+                               ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#c8d3d6")),
+                               ("TOPPADDING", (0, 0), (-1, -1), 2.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5)]))
+        out = [t]
+        if len(df) > max_rows:
+            out.append(Paragraph(f"Showing the first {max_rows} of {len(df)} rows – the full table is in the ZIP package.", S["small"]))
+        return out
+
+    def table_t(title, df):
+        """Heading + table kept together so a heading is never stranded at the bottom of a page."""
+        return [KeepTogether([Paragraph(title, S["h2"])] + table(df))]
+
+    def figure(key):
+        if key not in figs:
+            return []
+        cap, png = figs[key]
+        iw, ih = ImageReader(io.BytesIO(png)).getSize()
+        w = avail
+        h = w * ih / iw
+        if h > 12.5 * cm:
+            h = 12.5 * cm
+            w = h * iw / ih
+        return [KeepTogether([Image(io.BytesIO(png), width=w, height=h), Paragraph(escape(f"Figure {key}. {cap}"), S["cap"])])]
+
+    top = best.loc[best["Best_Score"].idxmin()]
+    story = [Paragraph(APP_NAME, S["title"]), Paragraph(APP_TAGLINE + " – analysis report", S["sub"]), Spacer(1, 10)]
+    meta = [["Prepared by", author], ["Date", datetime.now().strftime("%d %B %Y, %H:%M")],
+            ["Best-pocket definition", res["best_mode"]], ["Temperature for Ki", f"{res['temp_k']:.2f} K"],
+            ["Complexes / pockets analysed", f"{len(best)} / {len(P)}"],
+            ["Strongest complex", f"{top['Complex']} ({top['Best_Score']:.1f} kcal/mol, Ki ≈ {fmt_ki(top['Pred_Ki_nM'])})"]]
+    mt = Table([[Paragraph(f"<b>{escape(a)}</b>", S["td"]), Paragraph(escape(b), S["td"])] for a, b in meta], colWidths=[avail * 0.3, avail * 0.7])
+    mt.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#c8d3d6")), ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#eef4f5")),
+                            ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+    story += [mt, Spacer(1, 10), Paragraph("Executive summary", S["h1"])] + bullets(narrative(res))
+
+    cls = best["Affinity_Class"].value_counts().reindex(CLASS_ORDER).fillna(0).astype(int).reset_index()
+    cls.columns = ["Affinity class", "Complexes"]
+    story += table_t("Complexes per affinity class", cls)
+    story += table_t("Top-5 complexes by priority", 
+        best.sort_values("Priority_Rank").head(5)[["Priority_Rank", "Complex", "Best_Score", "Affinity_Class"]])
+
+    story += [Spacer(1, 8), Paragraph("1. Binding affinity", S["h1"]),
+              para(f"For each receptor–ligand file the best pocket ({res['best_mode'].split(' (')[0].lower()}) is selected and its AutoDock-Vina score "
+                   "(kcal/mol) is reported. More negative = stronger predicted binding.")]
+    story += figure("01") + figure("02")
+    story += table_t("Best-pocket table", 
+        best[["Priority_Rank", "Receptor", "Ligand", "Best_Pocket_ID", "Best_Score", "Affinity_Class", "Pred_Ki_nM"]].sort_values("Priority_Rank"))
+    story += bullets(["**≤ −9 kcal/mol** very strong; **−9 to −7** strong; **−7 to −5** moderate; **> −5** weak / likely non-specific.",
+                      "Differences below ~0.5 kcal/mol between ligands are within docking noise."])
+
+    story += [Spacer(1, 8), Paragraph("2. Cavity volume vs binding score", S["h1"]),
+              para("Each detected cavity is one point. Pearson (linear) and Spearman (rank) correlations test whether larger cavities systematically score better.")]
+    o = corr[corr["Level"] == "Overall"].iloc[0]
+    story += [para("**Key finding:** " + o["Interpretation"] + (f" (Pearson r = {o['Pearson_r']:.2f}, n = {int(o['N_pockets'])})." if not np.isnan(o["Pearson_r"]) else "."))]
+    story += figure("03") + figure("04") + figure("05")
+    story += table_t("Correlation statistics", 
+        corr[["Level", "Group", "N_pockets", "Pearson_r", "Spearman_rho", "Slope_kcal_per_100A3", "Interpretation"]])
+
+    story += [Spacer(1, 8), Paragraph("3. Pocket landscape", S["h1"]),
+              para("Within each complex all pockets are compared: score spread, the dominance gap between the best and runner-up pocket, "
+                   "and the number of competing pockets within 1 kcal/mol.")]
+    story += figure("06") + figure("07") + figure("08") + figure("09")
+    story += table_t("Dominance & competition metrics", 
+        best[["Receptor", "Ligand", "Best_Score", "Second_Best_Score", "Gap_To_Second", "Competing_Pockets_1kcal", "Pocket_Breadth", "N_Pockets"]])
+    story += bullets(["**Gap > 1.5 kcal/mol**: one clearly preferred site → likely specific binding.",
+                      "**Small gap + many competing pockets**: the ligand can sit in several places; consider targeted docking per site."])
+
+    story += [Spacer(1, 8), Paragraph("4. Binding site & residues", S["h1"]),
+              para("Contact residues of each best pocket are profiled by chemical character. For receptors with ≥ 2 ligands, site overlap is quantified "
+                   "by the Jaccard similarity of contact residues.")]
+    story += figure("10") + figure("11")
+    if len(res["jac"]):
+        story += table_t("Ligand site-overlap table", 
+            res["jac"][["Receptor", "Pair", "Jaccard_Similarity", "N_Shared_Residues", "Pocket_Centre_Distance_A", "Verdict"]])
+
+    story += [Spacer(1, 8), Paragraph("5. Predictions & ranking", S["h1"]),
+              para(f"Vina scores are converted into estimated Ki (Ki ≈ exp(ΔG / RT) at {res['temp_k']:.1f} K); ligands are compared head-to-head (ΔΔG); "
+                   "every complex receives a composite priority score = 70% binding strength + 15% site dominance + 15% pocket breadth.")]
+    story += figure("12") + figure("13")
+    story += table_t("Ranking table", 
+        best[["Priority_Rank", "Complex", "Priority_Score", "Best_Score", "Pred_Ki_nM", "Pred_Ki_uM", "Affinity_Class"]].sort_values("Priority_Rank"))
+    if len(res["pairs"]):
+        story += figure("14")
+        story += table_t("Ligand-vs-ligand comparison", 
+            res["pairs"][["Receptor", "Pair", "Score_A", "Score_B", "DDG_B_minus_A", "Stronger_Binder", "Ki_Fold_Difference", "Verdict"]])
+
+    story += [Spacer(1, 8), Paragraph("Methods text (suggested)", S["h2"]),
+              para(f"Blind docking was performed with CB-Dock2 (cavity detection + AutoDock Vina). {len(P)} cavities across {len(best)} receptor–ligand complexes "
+                   f"were analysed. The best pocket per complex was defined as the {res['best_mode'].split(' (')[0].lower()}. Estimated Ki was derived as "
+                   f"exp(ΔG/RT) at {res['temp_k']:.1f} K. Contact residues, pocket dominance and cavity-volume correlations were evaluated with {APP_NAME}."),
+              Paragraph("Before you report", S["h2"])]
+    story += bullets(["Docking scores are predictions; validate top hits with MD simulation or experiments.",
+                      "Keep the same number of cavities for all files in one analysis.",
+                      "Priority score and estimated Ki are screening heuristics; Vina typically carries ~2–3 kcal/mol error."])
+    story += [Spacer(1, 6), para("Please cite the underlying tools: Liu et al., CB-Dock2, Nucleic Acids Res. 2022; Trott & Olson, AutoDock Vina, "
+                                 "J Comput Chem 2010; Eberhardt et al., AutoDock Vina 1.2.0, J Chem Inf Model 2021.", "small")]
+
+    fstyle = ParagraphStyle("f", fontName="DSans", fontSize=6.4, leading=8, textColor=grey, alignment=TA_CENTER)
+
+    def decorate(canvas, doc):
+        canvas.saveState()
+        pw, ph = A4
+        canvas.setFont("DSans", 7.5)
+        canvas.setFillColor(grey)
+        canvas.drawString(LM, ph - 1.05 * cm, f"{APP_NAME} analysis report")
+        canvas.drawRightString(pw - RM, ph - 1.05 * cm, f"Prepared by: {author}"[:90])
+        canvas.setStrokeColor(colors.HexColor("#c8d3d6"))
+        canvas.setLineWidth(0.5)
+        canvas.line(LM, ph - 1.25 * cm, pw - RM, ph - 1.25 * cm)
+        y = 1.15 * cm
+        for line in reversed(FOOTER_LINES):
+            p = Paragraph(escape(line), fstyle)
+            _w, h = p.wrap(avail, 100)
+            p.drawOn(canvas, LM, y)
+            y += h + 2
+        canvas.line(LM, y + 1, pw - RM, y + 1)
+        canvas.setFont("DSans", 7.5)
+        canvas.drawCentredString(pw / 2, 0.55 * cm, f"Page {canvas.getPageNumber()}")
+        canvas.restoreState()
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=LM, rightMargin=RM, topMargin=1.8 * cm, bottomMargin=3.1 * cm,
+                            title=f"{APP_NAME} analysis report", author=author, creator=APP_NAME)
+    doc.build(story, onFirstPage=decorate, onLaterPages=decorate)
+    return buf.getvalue()
+
+
 def tab_report(res):
     best, P = res["best"], res["P"]
     st.markdown("### 7️⃣ Overall results & download")
@@ -1092,6 +1580,30 @@ def tab_report(res):
     if st.session_state.zip_bytes:
         st.success("Package ready: " + st.session_state.zip_info)
         st.download_button("⬇️ Download DockScope_results.zip", st.session_state.zip_bytes, file_name="DockScope_results.zip", mime="application/zip")
+
+    st.markdown("#### 📄 Download PDF report")
+    st.caption("A formatted A4 report with the executive summary, all 14 figures (black text on white), key tables, methods text and the "
+               "Swastome footer on every page. The name you enter is printed on the report header of every page.")
+    author = st.text_input("Your name (printed on the PDF)", key="pdf_author", placeholder="e.g. Dr. Jane Doe").strip()
+    if st.button("📄 Generate PDF report", disabled=not author, help="Enter your name first" if not author else None):
+        try:
+            with st.spinner("Building PDF – rendering figures, this takes a few seconds…"):
+                st.session_state.pdf_bytes = build_pdf(res, author)
+                st.session_state.pdf_for = author
+        except ImportError as e:
+            st.session_state.pdf_bytes = None
+            st.error(f"PDF libraries are missing ({e}). Add `reportlab` and `matplotlib` to requirements.txt and restart the app.")
+        except Exception as e:  # noqa: BLE001
+            st.session_state.pdf_bytes = None
+            st.error(f"Could not build the PDF: {e}")
+    if st.session_state.pdf_bytes:
+        if st.session_state.get("pdf_for") == author:
+            fname = re.sub(r"[^A-Za-z0-9_-]+", "_", author).strip("_") or "report"
+            st.success("PDF ready.")
+            st.download_button("⬇️ Download DockScope_report.pdf", st.session_state.pdf_bytes,
+                               file_name=f"DockScope_report_{fname}.pdf", mime="application/pdf", type="primary")
+        else:
+            st.info("The name was changed – click **Generate PDF report** again to print the new name.")
 
 
 # ----------------------------------------------------------------------------
@@ -1136,3 +1648,9 @@ for i, fn in enumerate([tab_affinity, tab_volume, tab_landscape, tab_residues, t
         res = gate(S)
         if res is not None:
             fn(res)
+
+# ----------------------------------------------------------------------------
+# App footer
+# ----------------------------------------------------------------------------
+st.divider()
+st.markdown('<div class="ds-footer">' + "<br>".join(FOOTER_LINES) + "</div>", unsafe_allow_html=True)
