@@ -1,6 +1,8 @@
-streamlit==1.66.1
-pandas>=2.2,<3
-numpy>=1.26
-scipy>=1.11
-plotly==5.24.1
-openpyxl>=3.1
+streamlit
+pandas
+numpy
+scipy
+plotly
+openpyxl
+reportlab
+matplotlib
